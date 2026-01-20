@@ -96,7 +96,7 @@ class Data(object):
 
     def _generate_train_cf_batch(self):
         if self.batch_size <= self.n_users:
-            users = rd.sample(self.exist_users, self.batch_size)
+            users = rd.sample(list(self.exist_users), self.batch_size)
         else:
             users = [rd.choice(self.exist_users) for _ in range(self.batch_size)]
 

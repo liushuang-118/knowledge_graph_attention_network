@@ -4,7 +4,8 @@ Tensorflow Implementation of Knowledge Graph Attention Network (KGAT) model in:
 Wang Xiang et al. KGAT: Knowledge Graph Attention Network for Recommendation. In KDD 2019.
 @author: Xiang Wang (xiangwang@u.nus.edu)
 '''
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 from utility.helper import *
 from utility.batch_test import *
 from time import time
@@ -339,14 +340,43 @@ if __name__ == '__main__':
     ndcgs = np.array(ndcg_loger)
     hit = np.array(hit_loger)
 
-    best_rec_0 = max(recs[:, 0])
-    idx = list(recs[:, 0]).index(best_rec_0)
+    # best_rec_0 = max(recs[:, 0])
+   
+    # idx = list(recs[:, 0]).index(best_rec_0)
 
-    final_perf = "Best Iter=[%d]@[%.1f]\trecall=[%s], precision=[%s], hit=[%s], ndcg=[%s]" % \
-                 (idx, time() - t0, '\t'.join(['%.5f' % r for r in recs[idx]]),
-                  '\t'.join(['%.5f' % r for r in pres[idx]]),
-                  '\t'.join(['%.5f' % r for r in hit[idx]]),
-                  '\t'.join(['%.5f' % r for r in ndcgs[idx]]))
+    # final_perf = "Best Iter=[%d]@[%.1f]\trecall=[%s], precision=[%s], hit=[%s], ndcg=[%s]" % \
+    #              (idx, time() - t0, '\t'.join(['%.5f' % r for r in recs[idx]]),
+    #               '\t'.join(['%.5f' % r for r in pres[idx]]),
+    #               '\t'.join(['%.5f' % r for r in hit[idx]]),
+    #               '\t'.join(['%.5f' % r for r in ndcgs[idx]]))
+    # print(final_perf)
+
+    # ===== 1. 先检查 recs 是否为空 =====
+    if len(recs) == 0:
+        print("Warning: recs is empty, cannot compute best performance")
+        final_perf = None
+    else:
+        # ===== 2. 确保 recs, pres, hit, ndcgs 都是 NumPy 数组 =====
+        recs_array = np.array(recs)    # shape [num_iters, num_metrics]
+        pres_array = np.array(pres)
+        hit_array = np.array(hit)
+        ndcgs_array = np.array(ndcgs)
+
+        # ===== 3. 找出第一列最大值 =====
+        best_rec_0 = np.max(recs_array[:, 0])
+
+        # ===== 4. 找到对应索引 =====
+        idx = int(np.where(recs_array[:, 0] == best_rec_0)[0][0])  # 第一个出现的位置
+
+        # ===== 5. 拼接字符串输出 =====
+        final_perf = "Best Iter=[%d]@[%.1f]\trecall=[%s], precision=[%s], hit=[%s], ndcg=[%s]" % (
+            idx, time() - t0,
+            '\t'.join(['%.5f' % r for r in recs_array[idx]]),
+            '\t'.join(['%.5f' % r for r in pres_array[idx]]),
+            '\t'.join(['%.5f' % r for r in hit_array[idx]]),
+            '\t'.join(['%.5f' % r for r in ndcgs_array[idx]])
+        )
+
     print(final_perf)
 
     save_path = '%soutput/%s/%s.result' % (args.proj_path, args.dataset, model.model_type)
