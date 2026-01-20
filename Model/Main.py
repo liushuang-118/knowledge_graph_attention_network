@@ -15,6 +15,7 @@ from CKE import CKE
 from CFKG import CFKG
 from NFM import NFM
 from KGAT import KGAT
+from tqdm import tqdm
 
 
 import os
@@ -226,7 +227,7 @@ if __name__ == '__main__':
     stopping_step = 0
     should_stop = False
 
-    for epoch in range(args.epoch):
+    for epoch in tqdm(range(args.epoch), desc="Training Epochs"):
         t1 = time()
         loss, base_loss, kge_loss, reg_loss = 0., 0., 0., 0.
         n_batch = data_generator.n_train // args.batch_size + 1
@@ -236,7 +237,7 @@ if __name__ == '__main__':
         Alternative Training for KGAT:
         ... phase 1: to train the recommender.
         """
-        for idx in range(n_batch):
+        for idx in tqdm(range(n_batch), desc=f"Epoch {epoch+1} Training Phase 1"):
             btime= time()
 
             batch_data = data_generator.generate_train_batch()
@@ -284,13 +285,13 @@ if __name__ == '__main__':
             print('ERROR: loss@phase2 is nan.')
             sys.exit()
 
-        show_step = 10
-        if (epoch + 1) % show_step != 0:
-            if args.verbose > 0 and epoch % args.verbose == 0:
-                perf_str = 'Epoch %d [%.1fs]: train==[%.5f=%.5f + %.5f + %.5f]' % (
-                    epoch, time() - t1, loss, base_loss, kge_loss, reg_loss)
-                print(perf_str)
-            continue
+        # show_step = 10
+        # if (epoch + 1) % show_step != 0:
+        #     if args.verbose > 0 and epoch % args.verbose == 0:
+        #         perf_str = 'Epoch %d [%.1fs]: train==[%.5f=%.5f + %.5f + %.5f]' % (
+        #             epoch, time() - t1, loss, base_loss, kge_loss, reg_loss)
+        #         print(perf_str)
+        #     continue
 
         """
         *********************************************************
@@ -313,76 +314,54 @@ if __name__ == '__main__':
         ndcg_loger.append(ret['ndcg'])
         hit_loger.append(ret['hit_ratio'])
 
+        # ===== 显式转成 Python float，避免 NumPy 1.25+ warning =====
+        recall_0 = float(ret['recall'][0])
+        recall_1 = float(ret['recall'][-1])
+        precision_0 = float(ret['precision'][0])
+        precision_1 = float(ret['precision'][-1])
+        hit_0 = float(ret['hit_ratio'][0])
+        hit_1 = float(ret['hit_ratio'][-1])
+        ndcg_0 = float(ret['ndcg'][0])
+        ndcg_1 = float(ret['ndcg'][-1])
+
         if args.verbose > 0:
-            perf_str = 'Epoch %d [%.1fs + %.1fs]: train==[%.5f=%.5f + %.5f + %.5f], recall=[%.5f, %.5f], ' \
-                       'precision=[%.5f, %.5f], hit=[%.5f, %.5f], ndcg=[%.5f, %.5f]' % \
-                       (epoch, t2 - t1, t3 - t2, loss, base_loss, kge_loss, reg_loss, ret['recall'][0], ret['recall'][-1],
-                        ret['precision'][0], ret['precision'][-1], ret['hit_ratio'][0], ret['hit_ratio'][-1],
-                        ret['ndcg'][0], ret['ndcg'][-1])
+            perf_str = (
+                'Epoch %d [%.1fs + %.1fs]: train==[%.5f=%.5f + %.5f + %.5f], '
+                'recall=[%.5f, %.5f], precision=[%.5f, %.5f], '
+                'hit=[%.5f, %.5f], ndcg=[%.5f, %.5f]'
+                % (
+                    epoch, t2 - t1, t3 - t2,
+                    loss, base_loss, kge_loss, reg_loss,
+                    recall_0, recall_1,
+                    precision_0, precision_1,
+                    hit_0, hit_1,
+                    ndcg_0, ndcg_1
+                )
+            )
             print(perf_str)
 
-        cur_best_pre_0, stopping_step, should_stop = early_stopping(ret['recall'][0], cur_best_pre_0,
-                                                                    stopping_step, expected_order='acc', flag_step=10)
+        # ===== early stopping 也显式使用 float =====
+        cur_best_pre_0, stopping_step, should_stop = early_stopping(
+            recall_0,
+            cur_best_pre_0,
+            stopping_step,
+            expected_order='acc',
+            flag_step=10
+        )
 
         # *********************************************************
         # early stopping when cur_best_pre_0 is decreasing for ten successive steps.
-        if should_stop == True:
+        if should_stop:
             break
 
         # *********************************************************
         # save the user & item embeddings for pretraining.
-        if ret['recall'][0] == cur_best_pre_0 and args.save_flag == 1:
+        if recall_0 == cur_best_pre_0 and args.save_flag == 1:
             save_saver.save(sess, weights_save_path + '/weights', global_step=epoch)
             print('save the weights in path: ', weights_save_path)
 
-    recs = np.array(rec_loger)
-    pres = np.array(pre_loger)
-    ndcgs = np.array(ndcg_loger)
-    hit = np.array(hit_loger)
-
-    # best_rec_0 = max(recs[:, 0])
-   
-    # idx = list(recs[:, 0]).index(best_rec_0)
-
-    # final_perf = "Best Iter=[%d]@[%.1f]\trecall=[%s], precision=[%s], hit=[%s], ndcg=[%s]" % \
-    #              (idx, time() - t0, '\t'.join(['%.5f' % r for r in recs[idx]]),
-    #               '\t'.join(['%.5f' % r for r in pres[idx]]),
-    #               '\t'.join(['%.5f' % r for r in hit[idx]]),
-    #               '\t'.join(['%.5f' % r for r in ndcgs[idx]]))
-    # print(final_perf)
-
-    # ===== 1. 先检查 recs 是否为空 =====
-    if len(recs) == 0:
-        print("Warning: recs is empty, cannot compute best performance")
-        final_perf = None
-    else:
-        # ===== 2. 确保 recs, pres, hit, ndcgs 都是 NumPy 数组 =====
-        recs_array = np.array(recs)    # shape [num_iters, num_metrics]
-        pres_array = np.array(pres)
-        hit_array = np.array(hit)
-        ndcgs_array = np.array(ndcgs)
-
-        # ===== 3. 找出第一列最大值 =====
-        best_rec_0 = np.max(recs_array[:, 0])
-
-        # ===== 4. 找到对应索引 =====
-        idx = int(np.where(recs_array[:, 0] == best_rec_0)[0][0])  # 第一个出现的位置
-
-        # ===== 5. 拼接字符串输出 =====
-        final_perf = "Best Iter=[%d]@[%.1f]\trecall=[%s], precision=[%s], hit=[%s], ndcg=[%s]" % (
-            idx, time() - t0,
-            '\t'.join(['%.5f' % r for r in recs_array[idx]]),
-            '\t'.join(['%.5f' % r for r in pres_array[idx]]),
-            '\t'.join(['%.5f' % r for r in hit_array[idx]]),
-            '\t'.join(['%.5f' % r for r in ndcgs_array[idx]])
-        )
-
-    print(final_perf)
-
-    save_path = '%soutput/%s/%s.result' % (args.proj_path, args.dataset, model.model_type)
-    ensureDir(save_path)
-    f = open(save_path, 'a')
-
-    f.write('embed_size=%d, lr=%.4f, layer_size=%s, node_dropout=%s, mess_dropout=%s, regs=%s, adj_type=%s, use_att=%s, use_kge=%s, pretrain=%d\n\t%s\n'
-            % (args.embed_size, args.lr, args.layer_size, args.node_dropout, args.mess_dropout, args.regs, args.adj_type, args.use_att, args.use_kge, args.pretrain, final_perf))
-    f.close()
+        # ===== 训练结束后统一转 NumPy array =====
+        recs = np.array(rec_loger)
+        pres = np.array(pre_loger)
+        ndcgs = np.array(ndcg_loger)
+        hit = np.array(hit_loger)
