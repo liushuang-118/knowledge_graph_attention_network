@@ -265,7 +265,7 @@ if __name__ == '__main__':
 
             if args.use_kge is True:
                 # using KGE method (knowledge graph embedding).
-                for idx in range(n_A_batch):
+                for idx in tqdm(range(n_A_batch), desc=f"Epoch {epoch+1} Training Phase 2 (KGE)"):
                     btime = time()
 
                     A_batch_data = data_generator.generate_train_A_batch()

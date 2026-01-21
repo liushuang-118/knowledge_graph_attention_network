@@ -129,6 +129,71 @@ class Data(object):
             neg_items += sample_neg_items_for_u(u, 1)
 
         return users, pos_items, neg_items
+    
+    # 在 load_data.py 的 Data 类中添加：
+    def generate_train_batch(self):
+        """生成CF训练批次数据"""
+        return self._generate_train_cf_batch()
+    
+    def generate_train_feed_dict(self, model, batch_data):
+        """生成CF训练feed_dict"""
+        users, pos_items, neg_items = batch_data
+        feed_dict = {
+            model.users: users,
+            model.pos_items: pos_items,
+            model.neg_items: neg_items,
+            model.node_dropout: eval(self.args.node_dropout),
+            model.mess_dropout: eval(self.args.mess_dropout)
+        }
+        return feed_dict
+    
+    def generate_train_A_batch(self):
+        """生成KG训练批次数据"""
+        exist_heads = list(self.all_kg_dict.keys())
+        if self.batch_size_kg <= len(exist_heads):
+            heads = rd.sample(exist_heads, self.batch_size_kg)
+        else:
+            heads = [rd.choice(exist_heads) for _ in range(self.batch_size_kg)]
+        
+        relations, pos_tails, neg_tails = [], [], []
+        for h in heads:
+            t_r_list = self.all_kg_dict[h]
+            index = np.random.randint(low=0, high=len(t_r_list), size=1)[0]
+            t, r = t_r_list[index]
+            relations.append(r)
+            pos_tails.append(t)
+            
+            # 采样负尾实体
+            while True:
+                neg_t = np.random.randint(low=0, high=self.n_entities, size=1)[0]
+                if (neg_t, r) not in t_r_list:
+                    neg_tails.append(neg_t)
+                    break
+        
+        return heads, relations, pos_tails, neg_tails
+
+    def generate_train_A_feed_dict(self, model, A_batch_data):
+        """生成KG训练feed_dict"""
+        heads, relations, pos_tails, neg_tails = A_batch_data
+        feed_dict = {
+            model.h: heads,
+            model.r: relations,
+            model.pos_t: pos_tails,
+            model.neg_t: neg_tails,
+            model.node_dropout: eval(self.args.node_dropout),
+            model.mess_dropout: eval(self.args.mess_dropout)
+        }
+        return feed_dict
+    
+    def generate_test_feed_dict(self, model, user_batch, item_batch, drop_flag=False):
+        """生成测试feed_dict"""
+        feed_dict = {
+            model.users: user_batch,
+            model.pos_items: item_batch,
+            model.node_dropout: [0.] * len(eval(self.args.layer_size)),
+            model.mess_dropout: [0.] * len(eval(self.args.layer_size))
+        }
+        return feed_dict
 
     def get_sparsity_split(self):
         try:
