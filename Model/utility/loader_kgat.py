@@ -158,3 +158,33 @@ class KGAT_loader(Data):
         print('\tsort all data done.')
 
         return new_h_list, new_r_list, new_t_list, new_v_list
+
+    # ------------------- debug method -------------------
+    def debug_check(self):
+        print("\n[DEBUG CHECK]")
+        print("n_users:", self.n_users)
+        print("n_items:", self.n_items)
+        print("n_entities:", self.n_entities)
+        print("n_relations:", self.n_relations)
+        print("len(all_h_list):", len(self.all_h_list))
+        print("len(all_t_list):", len(self.all_t_list))
+        print("len(all_r_list):", len(self.all_r_list))
+        print("len(all_v_list):", len(self.all_v_list))
+
+        # check adjacency matrices
+        for i, adj in enumerate(self.adj_list):
+            print(f"adj[{i}] shape: {adj.shape}, nnz={adj.nnz}")
+
+        # check laplacian matrices
+        for i, lap in enumerate(self.lap_list):
+            print(f"lap[{i}] shape: {lap.shape}, nnz={lap.nnz}")
+
+        # sanity check on indices
+        max_h = max(self.all_h_list)
+        max_t = max(self.all_t_list)
+        print("max head id:", max_h, "max tail id:", max_t)
+        expected_max_id = self.n_users + self.n_entities - 1
+        if max_h > expected_max_id or max_t > expected_max_id:
+            print("[WARNING] head/tail id exceeds n_users + n_entities - 1")
+
+        print("[DEBUG CHECK DONE]\n")

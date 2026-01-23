@@ -184,7 +184,7 @@ class Data(object):
             model.mess_dropout: eval(self.args.mess_dropout)
         }
         return feed_dict
-    
+        
     def generate_test_feed_dict(self, model, user_batch, item_batch, drop_flag=False):
         """生成测试feed_dict"""
         feed_dict = {
@@ -194,7 +194,7 @@ class Data(object):
             model.mess_dropout: [0.] * len(eval(self.args.layer_size))
         }
         return feed_dict
-
+    
     def get_sparsity_split(self):
         try:
             split_uids, split_state = [], []

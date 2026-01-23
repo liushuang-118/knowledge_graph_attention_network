@@ -436,34 +436,75 @@ class KGAT(object):
     """
     Update the attentive laplacian matrix.
     """
+    # def update_attentive_A(self, sess):
+    #     fold_len = len(self.all_h_list) // self.n_fold
+    #     kg_score = []
+
+    #     for i_fold in range(self.n_fold):
+    #         start = i_fold * fold_len
+    #         if i_fold == self.n_fold - 1:
+    #             end = len(self.all_h_list)
+    #         else:
+    #             end = (i_fold + 1) * fold_len
+
+    #         feed_dict = {
+    #             self.h: self.all_h_list[start:end],
+    #             self.r: self.all_r_list[start:end],
+    #             self.pos_t: self.all_t_list[start:end]
+    #         }
+    #         A_kg_score = sess.run(self.A_kg_score, feed_dict=feed_dict)
+    #         kg_score += list(A_kg_score)
+
+    #     kg_score = np.array(kg_score)
+
+    #     new_A = sess.run(self.A_out, feed_dict={self.A_values: kg_score})
+    #     new_A_values = new_A.values
+    #     new_A_indices = new_A.indices
+
+    #     rows = new_A_indices[:, 0]
+    #     cols = new_A_indices[:, 1]
+    #     self.A_in = sp.coo_matrix((new_A_values, (rows, cols)), shape=(self.n_users + self.n_entities,
+    #                                                                   self.n_users + self.n_entities))
+    #     if self.alg_type in ['org', 'gcn']:
+    #         self.A_in.setdiag(1.)
     def update_attentive_A(self, sess):
+        """
+        Update the attentive laplacian matrix and return attention scores as 1D numpy array.
+        """
         fold_len = len(self.all_h_list) // self.n_fold
         kg_score = []
-
+    
         for i_fold in range(self.n_fold):
             start = i_fold * fold_len
-            if i_fold == self.n_fold - 1:
-                end = len(self.all_h_list)
-            else:
-                end = (i_fold + 1) * fold_len
-
+            end = len(self.all_h_list) if i_fold == self.n_fold - 1 else (i_fold + 1) * fold_len
+    
             feed_dict = {
                 self.h: self.all_h_list[start:end],
                 self.r: self.all_r_list[start:end],
                 self.pos_t: self.all_t_list[start:end]
             }
+    
+            # 计算当前 batch 的 attention score
             A_kg_score = sess.run(self.A_kg_score, feed_dict=feed_dict)
             kg_score += list(A_kg_score)
-
-        kg_score = np.array(kg_score)
-
+    
+        kg_score = np.array(kg_score, dtype=np.float32)
+    
+        # 更新图中 Laplacian 矩阵
         new_A = sess.run(self.A_out, feed_dict={self.A_values: kg_score})
         new_A_values = new_A.values
         new_A_indices = new_A.indices
-
+    
         rows = new_A_indices[:, 0]
         cols = new_A_indices[:, 1]
-        self.A_in = sp.coo_matrix((new_A_values, (rows, cols)), shape=(self.n_users + self.n_entities,
-                                                                       self.n_users + self.n_entities))
+        self.A_in = sp.coo_matrix(
+            (new_A_values, (rows, cols)),
+            shape=(self.n_users + self.n_entities, self.n_users + self.n_entities)
+        )
+    
         if self.alg_type in ['org', 'gcn']:
             self.A_in.setdiag(1.)
+    
+        # **新增：返回 attention array**
+        self.att_scores = kg_score
+        return self.att_scores

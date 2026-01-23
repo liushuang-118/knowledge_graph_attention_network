@@ -16,11 +16,233 @@ from CFKG import CFKG
 from NFM import NFM
 from KGAT import KGAT
 from tqdm import tqdm
+from collections import defaultdict
+import heapq
 
 
 import os
 import sys
 os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
+
+
+class PathExplainer:
+    """高效的路径解释器 - 寻找真实的多跳路径"""
+    def __init__(self, KG):
+        self.KG = KG
+        self.path_cache = {}
+        
+    def find_multi_hop_paths(self, start, target, max_hops=3, beam_width=20):
+        """寻找多跳路径，返回真实的KG路径"""
+        cache_key = f"{start}_{target}_{max_hops}"
+        if cache_key in self.path_cache:
+            return self.path_cache[cache_key]
+        
+        paths = []
+        if start == target:
+            self.path_cache[cache_key] = paths
+            return paths
+            
+        # 使用Beam Search而不是BFS
+        # beam: (node, path, score, visited)
+        beam = [(start, [], 1.0, {start})]
+        
+        for hop in range(max_hops):
+            next_beam = []
+            
+            for node, path, score, visited in beam:
+                if node not in self.KG:
+                    continue
+                
+                # 获取邻居并按attention排序
+                neighbors = self.KG.get(node, [])
+                if not neighbors:
+                    continue
+                    
+                neighbors.sort(key=lambda x: -x[2])
+                
+                # 取top-k邻居
+                for neighbor, relation, weight in neighbors[:10]:
+                    if neighbor in visited:
+                        continue
+                    
+                    # 创建新路径
+                    new_path = path + [(node, relation, neighbor, weight)]
+                    new_score = score * weight
+                    new_visited = visited.copy()
+                    new_visited.add(neighbor)
+                    
+                    # 检查是否到达目标
+                    if neighbor == target:
+                        paths.append({
+                            "score": new_score,
+                            "path": new_path
+                        })
+                        # 如果找到足够路径，可以提前返回
+                        if len(paths) >= 5:
+                            break
+                    else:
+                        next_beam.append((neighbor, new_path, new_score, new_visited))
+            
+            # 对next_beam按score排序并保留beam_width个
+            next_beam.sort(key=lambda x: -x[2])
+            beam = next_beam[:beam_width]
+            
+            if not beam:
+                break
+        
+        # 按分数排序
+        paths.sort(key=lambda x: -x["score"])
+        self.path_cache[cache_key] = paths
+        return paths
+    
+    def find_paths_via_intermediate_entities(self, start_items, target_item, max_hops=3):
+        """通过中间实体寻找路径"""
+        all_paths = []
+        
+        for start in start_items:
+            # 寻找所有可能路径
+            paths = self.find_multi_hop_paths(start, target_item, max_hops)
+            
+            for p in paths:
+                if p["path"]:  # 确保路径不为空
+                    p["start_item"] = start
+                    all_paths.append(p)
+        
+        # 如果没有找到路径，尝试寻找通过共同邻居的路径
+        if not all_paths:
+            all_paths = self.find_paths_via_common_entities(start_items, target_item)
+        
+        # 去重并排序
+        unique_paths = []
+        seen = set()
+        
+        for p in all_paths:
+            # 创建路径的唯一标识
+            path_key = tuple((h, r, t) for h, r, t, _ in p["path"])
+            if path_key not in seen:
+                seen.add(path_key)
+                unique_paths.append(p)
+        
+        unique_paths.sort(key=lambda x: -x["score"])
+        return unique_paths[:1]  # 返回最多5条路径
+    
+    def find_paths_via_common_entities(self, start_items, target_item):
+        """通过共同实体寻找路径（替代方法）"""
+        paths = []
+        
+        if target_item not in self.KG:
+            return paths
+            
+        # 获取目标物品的邻居
+        target_neighbors = {t for t, _, _ in self.KG.get(target_item, [])}
+        
+        for start in start_items:
+            if start not in self.KG:
+                continue
+                
+            # 寻找start->X->target的路径
+            for neighbor1, rel1, w1 in self.KG.get(start, []):
+                if neighbor1 not in self.KG:
+                    continue
+                    
+                # 从neighbor1寻找连接到target的路径
+                for neighbor2, rel2, w2 in self.KG.get(neighbor1, []):
+                    if neighbor2 == target_item:
+                        # 找到2跳路径
+                        paths.append({
+                            "score": w1 * w2,
+                            "path": [
+                                (start, rel1, neighbor1, w1),
+                                (neighbor1, rel2, target_item, w2)
+                            ],
+                            "start_item": start
+                        })
+                    elif neighbor2 in self.KG:
+                        # 寻找3跳路径
+                        for neighbor3, rel3, w3 in self.KG.get(neighbor2, []):
+                            if neighbor3 == target_item:
+                                paths.append({
+                                    "score": w1 * w2 * w3,
+                                    "path": [
+                                        (start, rel1, neighbor1, w1),
+                                        (neighbor1, rel2, neighbor2, w2),
+                                        (neighbor2, rel3, target_item, w3)
+                                    ],
+                                    "start_item": start
+                                })
+        
+        return paths
+    
+
+
+def get_topk_items_for_user(sess, model, user_id, k=10):
+    """
+    返回该 user 的 Top-K item id
+    """
+    # 构造全部 item 的索引
+    all_items = np.arange(model.n_items)
+
+    # 构造 feed_dict
+    feed_dict = {
+        model.users: np.array([user_id] * model.n_items),
+        model.pos_items: all_items,
+        model.neg_items: all_items,
+        model.node_dropout: np.zeros(model.n_layers + 1),
+        model.mess_dropout: np.zeros(model.n_layers + 1),
+    }
+
+    # 获取评分
+    scores = sess.run(model.batch_predictions, feed_dict=feed_dict)
+    scores = scores.flatten()
+
+    # 取 top-k
+    topk_items = heapq.nlargest(k, range(len(scores)), scores.__getitem__)
+    return topk_items
+
+
+def export_detailed_paths(sess, model, data_generator, KG, save_path):
+    print("Exporting KG paths...")
+    explainer = PathExplainer(KG)
+
+    with open(save_path, "w", encoding="utf-8") as f:
+        test_users = list(data_generator.test_user_dict.keys())[:5]
+
+        for user in tqdm(test_users, desc="Users"):
+            f.write(f"User {user}\n")
+
+            hist_items = data_generator.train_user_dict.get(user, [])
+            top_items = get_topk_items_for_user(sess, model, user, k=10)
+
+            for rank, item in enumerate(top_items, 1):
+                f.write(f"  Top-{rank} Item {item}\n")
+
+                if not hist_items:
+                    f.write("    No path found (no history)\n")
+                    continue
+
+                paths = explainer.find_paths_via_intermediate_entities(
+                    hist_items, item, max_hops=3
+                )
+
+                if not paths:
+                    f.write("    No path found\n")
+                    continue
+
+                # ⭐ 只取第一条（已经是 score 最大）
+                p = paths[0]
+
+                f.write(f"    Path (score={p['score']:.6f})\n")
+
+                # user → 起始历史 item
+                first_h = p["path"][0][0]
+                f.write(f"      (User {user}) --interact--> ({first_h})\n")
+
+                for h, r, t, w in p["path"]:
+                    f.write(f"      ({h}, {r}, {t}), attention={w:.6f}\n")
+
+            f.write("\n")
+
+
 
 def load_pretrained_data(args):
     pre_model = 'mf'
@@ -365,3 +587,62 @@ if __name__ == '__main__':
         pres = np.array(pre_loger)
         ndcgs = np.array(ndcg_loger)
         hit = np.array(hit_loger)
+        
+    """
+    *********************************************************
+    Export Top-10 recommendation paths with attention scores
+    with dynamic max_hops expansion
+    *********************************************************
+    """
+    
+    print("Exporting top-10 recommendation paths with attention scores...")
+    
+    # 1. 更新注意力矩阵并获取 attention score
+    att_scores = model.update_attentive_A(sess)
+    
+    # 2. 构建带 attention 的 KG（添加反向边以便路径搜索）
+    def build_kg_with_attention(data_generator, att_scores):
+        """
+        构建带反向边的KG以便更好地寻找路径
+        """
+        KG = defaultdict(list)
+        idx = 0
+        
+        print(f"Building KG from laplacian matrices...")
+        total_edges = 0
+        
+        for lap, r_id in zip(data_generator.lap_list, data_generator.adj_r_list):
+            coo = lap.tocoo()
+            edges_in_matrix = len(coo.data)
+            total_edges += edges_in_matrix
+            
+            for i in range(len(coo.data)):
+                h = coo.row[i]
+                t = coo.col[i]
+                if idx < len(att_scores):
+                    w = float(att_scores[idx])
+                else:
+                    w = 0.5
+                idx += 1
+                
+                # 添加正向边
+                KG[h].append((t, r_id, w))
+                # 添加反向边（这对于路径搜索很重要）
+                reverse_r_id = f"rev_{r_id}"
+                KG[t].append((h, reverse_r_id, w))
+        
+        return KG
+    
+    KG = build_kg_with_attention(data_generator, att_scores)
+    
+    # 3. 保存路径
+    save_dir = r"/content/drive/MyDrive/KGAT/Data/amazon-book"
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, "kgat_topk_paths.txt")
+    
+    # 4. 导出详细路径
+    export_detailed_paths(sess, model, data_generator, KG, save_path)
+    print("Done! Paths exported.")
+
+    
+    
