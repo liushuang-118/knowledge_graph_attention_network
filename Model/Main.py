@@ -205,7 +205,8 @@ def export_detailed_paths(sess, model, data_generator, KG, save_path):
     explainer = PathExplainer(KG)
 
     with open(save_path, "w", encoding="utf-8") as f:
-        test_users = list(data_generator.test_user_dict.keys())[:5]
+        test_users = list(data_generator.test_user_dict.keys())[:50]
+        print("Number of test users:", len(test_users))
 
         for user in tqdm(test_users, desc="Users"):
             f.write(f"User {user}\n")
@@ -240,6 +241,34 @@ def export_detailed_paths(sess, model, data_generator, KG, save_path):
                 for h, r, t, w in p["path"]:
                     f.write(f"      ({h}, {r}, {t}), attention={w:.6f}\n")
 
+            f.write("\n")
+
+
+def export_paths_for_users(sess, model, data_generator, KG, save_path, users_to_export,
+                           top_k_items=10, max_paths_per_user=5):
+    print(f"Exporting paths for {len(users_to_export)} users to {save_path} ...")
+    explainer = PathExplainer(KG)
+    with open(save_path, "w", encoding="utf-8") as f:
+        for user in tqdm(users_to_export, desc="Users"):
+            f.write(f"User {user}\n")
+            hist_items = data_generator.train_user_dict.get(user, [])
+            top_items = get_topk_items_for_user(sess, model, user, k=top_k_items)
+            paths_count = 0
+            for item in top_items:
+                if not hist_items:
+                    continue
+                paths = explainer.find_paths_via_intermediate_entities(hist_items, item, max_hops=3)
+                for p in paths:
+                    if paths_count >= max_paths_per_user:
+                        break
+                    f.write(f"  Item {item}, Path (score={p['score']:.6f})\n")
+                    first_h = p["path"][0][0]
+                    f.write(f"    (User {user}) --interact--> ({first_h})\n")
+                    for h, r, t, w in p["path"]:
+                        f.write(f"    ({h}, {r}, {t}), attention={w:.6f}\n")
+                    paths_count += 1
+                if paths_count >= max_paths_per_user:
+                    break
             f.write("\n")
 
 
@@ -642,7 +671,30 @@ if __name__ == '__main__':
     
     # 4. 导出详细路径
     export_detailed_paths(sess, model, data_generator, KG, save_path)
-    print("Done! Paths exported.")
+    
+    
+    # 随机抽 50 个用户
+    all_users = list(data_generator.train_user_dict.keys())
+    np.random.seed(42)
+    selected_users = list(np.random.choice(all_users, size=50, replace=False))
+
+    # 训练阶段：每用户 2000 条路径
+    train_path_file = os.path.join(save_dir, "train_50_users_2000_paths.txt")
+    export_paths_for_users(sess, model, data_generator, KG,
+                           save_path=train_path_file,
+                           users_to_export=selected_users,
+                           top_k_items=10,
+                           max_paths_per_user=2000)
+
+    # 测试阶段：每用户 20 条路径
+    test_path_file = os.path.join(save_dir, "test_50_users_20_paths.txt")
+    export_paths_for_users(sess, model, data_generator, KG,
+                           save_path=test_path_file,
+                           users_to_export=selected_users,
+                           top_k_items=10,
+                           max_paths_per_user=20)
+
+    print("Done! All paths exported.")
 
     
     
